@@ -11,7 +11,21 @@
 #define PORT 42069
 #define BUFFER_SIZE 1024
 
+int messageCount = 0;
 std::atomic<bool> running(true);
+
+class Message {
+public:
+    int id;
+    char name[50]{};
+    char message[250]{};
+    char reciever[50]{};
+    Message(int i, const char* n, const char* m, const char* r) : id(i) {
+        strncpy(name, n, sizeof(name));
+        strncpy(message, m, sizeof(message));
+        strncpy(reciever, r, sizeof(reciever)); // Corrected this line
+    }
+};
 
 class Client {
 public:
@@ -46,25 +60,55 @@ public:
         }
 
         std::cout << "Connected to server.\n";
+
+        // Stuur de naam van de client naar de server
+        send(client_fd, name.c_str(), name.length(), 0);
+
         return true;
     }
 
     void send_message() {
         char buffer[BUFFER_SIZE];
         while (running) {
-            std::cout << "send message: ";
+            std::cout << "Send message: ";
             std::cin.getline(buffer, BUFFER_SIZE);
             if (strcmp(buffer, "exit") == 0) {
                 running = false;
                 break;
             }
-            std::string message = name + ": " + buffer;
-            int bytes_sent = send(client_fd, message.c_str(), message.length(), 0);
+            messageCount++;
+            std::string message = buffer;
+            std::string reciever;
+            std::cout << "Enter name reciever: ";
+            std::getline(std::cin, reciever);
+            Message msg(messageCount, name.c_str(), message.c_str(), reciever.c_str());
+            int bytes_sent = send(client_fd, reinterpret_cast<char*>(&msg), sizeof(msg), 0);
             if (bytes_sent == -1) {
                 std::cerr << "Failed to send message\n";
                 break;
             } else {
                 std::cout << "Message sent: " << message << "\n";
+            }
+        }
+    }
+
+    void receive_message() {
+        char buffer[BUFFER_SIZE];
+        while (running) {
+            int bytes_received = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
+            if (bytes_received > 0) {
+                buffer[bytes_received] = '\0';
+                Message msg(0, "", "", "");
+                memcpy(&msg, buffer, sizeof(Message));
+                std::cout << "Received from " << msg.name << ": " << msg.message << "\n";
+            } else if (bytes_received == 0) {
+                std::cout << "Server closed connection\n";
+                running = false;
+                break;
+            } else {
+                std::cerr << "Receive failed\n";
+                running = false;
+                break;
             }
         }
     }
@@ -96,14 +140,21 @@ int main() {
     }
 
     std::thread send_thread(&Client::send_message, &client);
+    std::thread receive_thread(&Client::receive_message, &client);
+
     if (send_thread.joinable()) {
-        std::cout << "Thread started successfully.\n";
         send_thread.detach();
     } else {
-        std::cerr << "Failed to start thread.\n";
+        std::cerr << "Failed to start send thread.\n";
     }
 
-    // Keep the main thread alive to continue sending messages
+    if (receive_thread.joinable()) {
+        receive_thread.detach();
+    } else {
+        std::cerr << "Failed to start receive thread.\n";
+    }
+
+    // Keep the main thread alive to continue sending and receiving messages
     while (running) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
